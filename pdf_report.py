@@ -721,15 +721,3 @@ def build_pdf(
     doc.build(story, onFirstPage=footer, onLaterPages=footer)
 
 
-
-        
-        # Footer text
-        canvas.setFont(base_font, 9)
-        canvas.setFillColor(TEXT_MUTED)
-        canvas.drawString(2.0*cm, 1.3*cm, "GGtech • Dr. Omur Tezcan")
-        canvas.drawCentredString(A4[0]/2, 1.3*cm, "omurtezcan@gmail.com")
-        canvas.drawRightString(A4[0]-2.0*cm, 1.3*cm, f"Sayfa {doc_.page}")
-        
-        canvas.restoreState()
-
-    doc.build(story, onFirstPage=footer, onLaterPages=footer)
