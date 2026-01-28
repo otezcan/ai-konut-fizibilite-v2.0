@@ -55,7 +55,7 @@ def _register_fonts():
             addMapping('DejaVu', 0, 1, 'DejaVu-Italic')    # Italic
             addMapping('DejaVu', 1, 1, 'DejaVu-BoldItalic') # Bold+Italic
     except Exception as e:
-        print(f"Font registration warning: {e}")
+        # Silently fail - will use Helvetica fallback
         fonts_registered = False
     
     return fonts_registered
@@ -168,8 +168,15 @@ def build_pdf(
     warnings = [tr_to_en(w) for w in warnings]
     
     fonts_ok = _register_fonts()
-    base_font = "DejaVu" if fonts_ok else "Helvetica"
-    bold_font = "DejaVu-Bold" if fonts_ok else "Helvetica-Bold"
+    
+    # Safe font selection with fallback
+    if fonts_ok and "DejaVu" in pdfmetrics.getRegisteredFontNames():
+        base_font = "DejaVu"
+        bold_font = "DejaVu-Bold"
+    else:
+        # Fallback to Helvetica (always available)
+        base_font = "Helvetica"
+        bold_font = "Helvetica-Bold"
     italic_font = "DejaVu-Italic" if fonts_ok else "Helvetica-Oblique"
 
     # Custom styles
@@ -701,6 +708,20 @@ def build_pdf(
         canvas.setStrokeColor(MEDIUM_BG)
         canvas.setLineWidth(1)
         canvas.line(2.0*cm, 1.8*cm, A4[0]-2.0*cm, 1.8*cm)
+        
+        # Footer text
+        canvas.setFont(base_font, 9)
+        canvas.setFillColor(TEXT_MUTED)
+        canvas.drawString(2.0*cm, 1.3*cm, "GGtech • Dr. Omur Tezcan")
+        canvas.drawCentredString(A4[0]/2, 1.3*cm, "omurtezcan@gmail.com")
+        canvas.drawRightString(A4[0]-2.0*cm, 1.3*cm, f"Sayfa {doc_.page}")
+        
+        canvas.restoreState()
+
+    doc.build(story, onFirstPage=footer, onLaterPages=footer)
+
+
+
         
         # Footer text
         canvas.setFont(base_font, 9)
