@@ -14,6 +14,24 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 import os
 
+# Import formatters for consistent number display
+try:
+    from formatters import fmt_int, fmt_usd, fmt_try, fmt_pct, fmt_m2
+    FORMATTERS_AVAILABLE = True
+except ImportError:
+    FORMATTERS_AVAILABLE = False
+    # Fallback formatters
+    def fmt_int(x):
+        return f"{x:,.0f}" if x is not None else "-"
+    def fmt_usd(x):
+        return f"${x:,.0f}" if x is not None else "-"
+    def fmt_try(x):
+        return f"₺{x:,.0f}" if x is not None else "-"
+    def fmt_pct(x):
+        return f"{x*100:.1f}%" if x is not None else "-"
+    def fmt_m2(x):
+        return f"{x:,.0f} m²" if x is not None else "-"
+
 # Color palette - Modern professional theme
 PRIMARY_COLOR = colors.HexColor("#1E3A8A")      # Navy blue
 SECONDARY_COLOR = colors.HexColor("#3B82F6")    # Bright blue
@@ -90,16 +108,15 @@ def tr_to_en(text: str) -> str:
     return result
 
 def money_usd(x: Optional[float]) -> str:
-    if x is None:
-        return "-"
-    return f"${x:,.0f}"
+    """Deprecated: Use fmt_usd from formatters instead"""
+    return fmt_usd(x)
 
 def money_try(x: Optional[float]) -> str:
-    if x is None:
-        return "-"
-    return f"₺{x:,.0f}"
+    """Deprecated: Use fmt_try from formatters instead"""
+    return fmt_try(x)
 
 def num(x: Optional[float], d: int = 2) -> str:
+    """Format number with decimal places (still used in PDF)"""
     if x is None:
         return "-"
     return f"{x:,.{d}f}"
