@@ -44,21 +44,24 @@ TEXT_DARK = colors.HexColor("#1E293B")          # Almost black
 TEXT_MUTED = colors.HexColor("#64748B")         # Gray
 
 def _register_fonts():
-    """Register Turkish-compatible fonts with font family"""
-    from reportlab.pdfbase.ttfonts import TTFont
-    from reportlab.lib.fonts import addMapping
-    
-    font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-    bold_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-    italic_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf"
-    bold_italic_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-BoldOblique.ttf"
-    
-    fonts_registered = False
-    
+    """Register Turkish-compatible fonts with font family - returns True if successful"""
     try:
-        if os.path.exists(font_path):
-            pdfmetrics.registerFont(TTFont("DejaVu", font_path))
-            fonts_registered = True
+        from reportlab.pdfbase.ttfonts import TTFont
+        from reportlab.lib.fonts import addMapping
+        
+        font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+        bold_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+        italic_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf"
+        bold_italic_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans-BoldOblique.ttf"
+        
+        # Check if files exist before attempting registration
+        if not os.path.exists(font_path):
+            return False
+        
+        # Try to register fonts
+        pdfmetrics.registerFont(TTFont("DejaVu", font_path))
+        
+        # Register variants if they exist
         if os.path.exists(bold_path):
             pdfmetrics.registerFont(TTFont("DejaVu-Bold", bold_path))
         if os.path.exists(italic_path):
@@ -66,17 +69,20 @@ def _register_fonts():
         if os.path.exists(bold_italic_path):
             pdfmetrics.registerFont(TTFont("DejaVu-BoldItalic", bold_italic_path))
         
-        # Register font family mappings (important for proper bold/italic rendering)
-        if fonts_registered:
-            addMapping('DejaVu', 0, 0, 'DejaVu')           # Normal
-            addMapping('DejaVu', 1, 0, 'DejaVu-Bold')      # Bold
-            addMapping('DejaVu', 0, 1, 'DejaVu-Italic')    # Italic
-            addMapping('DejaVu', 1, 1, 'DejaVu-BoldItalic') # Bold+Italic
+        # Register font family mappings
+        addMapping('DejaVu', 0, 0, 'DejaVu')
+        if os.path.exists(bold_path):
+            addMapping('DejaVu', 1, 0, 'DejaVu-Bold')
+        if os.path.exists(italic_path):
+            addMapping('DejaVu', 0, 1, 'DejaVu-Italic')
+        if os.path.exists(bold_italic_path):
+            addMapping('DejaVu', 1, 1, 'DejaVu-BoldItalic')
+        
+        return True
+        
     except Exception as e:
-        # Silently fail - will use Helvetica fallback
-        fonts_registered = False
-    
-    return fonts_registered
+        # Any error means fonts not available
+        return False
 
 def tr_to_en(text: str) -> str:
     """
@@ -186,15 +192,25 @@ def build_pdf(
     
     fonts_ok = _register_fonts()
     
-    # Safe font selection with fallback
-    if fonts_ok and "DejaVu" in pdfmetrics.getRegisteredFontNames():
-        base_font = "DejaVu"
-        bold_font = "DejaVu-Bold"
+    # CRITICAL: Safe font selection - use Helvetica if DejaVu not available
+    # This prevents KeyError when fonts are not registered
+    if fonts_ok:
+        # Verify fonts are actually registered before using them
+        registered_fonts = pdfmetrics.getRegisteredFontNames()
+        if "DejaVu" in registered_fonts and "DejaVu-Bold" in registered_fonts:
+            base_font = "DejaVu"
+            bold_font = "DejaVu-Bold"
+            italic_font = "DejaVu-Italic" if "DejaVu-Italic" in registered_fonts else "Helvetica-Oblique"
+        else:
+            # Fonts registration failed, use Helvetica
+            base_font = "Helvetica"
+            bold_font = "Helvetica-Bold"
+            italic_font = "Helvetica-Oblique"
     else:
-        # Fallback to Helvetica (always available)
+        # DejaVu not available - use Helvetica (always safe)
         base_font = "Helvetica"
         bold_font = "Helvetica-Bold"
-    italic_font = "DejaVu-Italic" if fonts_ok else "Helvetica-Oblique"
+        italic_font = "Helvetica-Oblique"
 
     # Custom styles
     styles = getSampleStyleSheet()
