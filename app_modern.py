@@ -9,7 +9,7 @@ import json
 import pandas as pd
 import time
 
-from feasibility_v2 import compute_outputs, sensitivity, DEFAULTS, DAIRE_TIPLERI
+from feasibility import compute_outputs, sensitivity, DEFAULTS, DAIRE_TIPLERI
 from pdf_report import build_pdf
 from excel_export import create_excel_report, create_comparison_excel
 from formatters import fmt_int, fmt_usd, fmt_try, fmt_pct, fmt_m2
