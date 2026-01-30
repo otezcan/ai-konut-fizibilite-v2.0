@@ -719,5 +719,3 @@ def build_pdf(
         canvas.restoreState()
 
     doc.build(story, onFirstPage=footer, onLaterPages=footer)
-
-
