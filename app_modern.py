@@ -6,17 +6,20 @@ from typing import Dict, Any, Optional
 import xml.etree.ElementTree as ET
 from urllib.request import urlopen
 import json
+import pandas as pd
+import time
 
-from feasibility import compute_outputs, sensitivity, DEFAULTS
+from feasibility_v2 import compute_outputs, sensitivity, DEFAULTS, DAIRE_TIPLERI
 from pdf_report import build_pdf
 from excel_export import create_excel_report, create_comparison_excel
+from formatters import fmt_int, fmt_usd, fmt_try, fmt_pct, fmt_m2
 
 # ============================================================================
 # CONFIGURATION & CONSTANTS
 # ============================================================================
 APP_TITLE = "AI Konut Fizibilite Asistani"
 APP_SUBTITLE = "Hizli, Akilli, Profesyonel Analiz"
-DEFAULT_DAILY_LIMIT = 5
+DEFAULT_DAILY_LIMIT = 100  # Updated: 100 hesaplama/kullanıcı/gün
 TCMB_URL = "https://www.tcmb.gov.tr/kurlar/today.xml"
 
 # Modern color scheme
@@ -26,28 +29,37 @@ SUCCESS_COLOR = "#10B981"
 WARNING_COLOR = "#F59E0B"
 DANGER_COLOR = "#EF4444"
 
+# Example scenarios for quick start
+EXAMPLE_SCENARIOS = {
+    "Küçük Proje (5.000 m²)": {
+        "arsa_alani_m2": 5000,
+        "emsal": 1.8,
+        "otopark_tipi": "ACIK",
+        "konut_sinifi": "ORTA",
+        "arsa_toplam_degeri_usd": 2500000,
+        "ortalama_konut_m2": 100,
+    },
+    "Orta Proje (8.500 m²)": {
+        "arsa_alani_m2": 8500,
+        "emsal": 2.0,
+        "otopark_tipi": "KAPALI",
+        "konut_sinifi": "YUKSEK",
+        "arsa_toplam_degeri_usd": 5500000,
+        "ortalama_konut_m2": 135,
+    },
+    "Büyük Proje (15.000 m²)": {
+        "arsa_alani_m2": 15000,
+        "emsal": 2.2,
+        "otopark_tipi": "KAPALI",
+        "konut_sinifi": "YUKSEK",
+        "arsa_toplam_degeri_usd": 10000000,
+        "ortalama_konut_m2": 150,
+    },
+}
+
 # ============================================================================
-# HELPER FUNCTIONS
+# HELPER FUNCTIONS (Formatting now in formatters.py)
 # ============================================================================
-def fmt_int(x: Optional[float]) -> str:
-    if x is None:
-        return "-"
-    return f"{x:,.0f}"
-
-def fmt_usd(x: Optional[float]) -> str:
-    if x is None:
-        return "-"
-    return f"${x:,.0f}"
-
-def fmt_try(x: Optional[float]) -> str:
-    if x is None:
-        return "-"
-    return f"₺{x:,.0f}"
-
-def fmt_pct(x: Optional[float]) -> str:
-    if x is None:
-        return "-"
-    return f"{x*100:.1f}%"
 
 def get_client() -> OpenAI:
     api_key = st.secrets.get("OPENAI_API_KEY", None)
@@ -70,7 +82,12 @@ def usage_store():
     return {"day": date.today().isoformat(), "counts": {}}
 
 def check_and_increment_quota() -> tuple[bool, int, int]:
-    """Returns (success, remaining, total)"""
+    """
+    Returns (success, remaining, total)
+    
+    IMPORTANT: This is ONLY called when "Hesapla" button is pressed,
+    NOT during chat interactions. Chat is unlimited!
+    """
     store = usage_store()
     today = date.today().isoformat()
     if store["day"] != today:
@@ -78,6 +95,11 @@ def check_and_increment_quota() -> tuple[bool, int, int]:
         store["counts"] = {}
     key = stable_user_key()
     limit = int(st.secrets.get("DAILY_LIMIT", DEFAULT_DAILY_LIMIT))
+    
+    # If limit is very high (>1000), treat as unlimited
+    if limit >= 1000:
+        return True, 999999, 999999
+    
     count = store["counts"].get(key, 0)
     remaining = max(0, limit - count)
     if count >= limit:
@@ -428,14 +450,15 @@ with st.sidebar:
     
     st.divider()
     
-    # Quota
+    # Quota (only show if limited)
     _, remaining, total = check_and_increment_quota()
-    quota_pct = (remaining / total * 100) if total > 0 else 0
-    
-    st.markdown("### 📊 Kullanim")
-    render_progress_bar(quota_pct, f"{remaining}/{total} hesaplama kaldi")
-    
-    st.divider()
+    if total < 1000:  # If total < 1000, show quota. Otherwise unlimited
+        quota_pct = (remaining / total * 100) if total > 0 else 0
+        
+        st.markdown("### 📊 Kullanim")
+        render_progress_bar(quota_pct, f"{remaining}/{total} hesaplama kaldi")
+        
+        st.divider()
     
     # Quick actions
     st.markdown("### 🚀 Hizli Islemler")
@@ -444,6 +467,25 @@ with st.sidebar:
         st.session_state.messages = []
         st.session_state.initialized = False
         st.rerun()
+    
+    st.divider()
+    
+    # Example scenarios
+    st.markdown("### 🎯 Ornek Senaryolar")
+    st.caption("Hizli test icin hazir sablonlar")
+    
+    scenario_name = st.selectbox(
+        "Senaryo sec",
+        [""] + list(EXAMPLE_SCENARIOS.keys()),
+        label_visibility="collapsed"
+    )
+    
+    if scenario_name and scenario_name in EXAMPLE_SCENARIOS:
+        if st.button("📥 Yukle", use_container_width=True, key="load_scenario"):
+            st.session_state.inputs = ensure_defaults(EXAMPLE_SCENARIOS[scenario_name])
+            st.success(f"✅ {scenario_name} yuklendi!")
+            time.sleep(0.5)
+            st.rerun()
     
     if st.button("📄 Son Raporu İndir", use_container_width=True, disabled=True):
         st.info("Henuz rapor olusturulmadi")
@@ -543,44 +585,111 @@ with tab2:
     
     with col_left:
         st.markdown("#### Arsa Bilgileri")
-        arsa = st.number_input("Arsa Alani (m²)", value=float(st.session_state.inputs.get("arsa_alani_m2", 0.0) or 0.0), step=100.0, key="quick_arsa")
-        emsal = st.number_input("Emsal", value=float(st.session_state.inputs.get("emsal", 0.0) or 0.0), step=0.05, format="%.2f", key="quick_emsal")
-        arsa_degeri = st.number_input("Arsa Degeri ($)", value=float(st.session_state.inputs.get("arsa_toplam_degeri_usd", 0.0) or 0.0), step=100000.0, key="quick_arsa_degeri")
+        arsa = st.number_input(
+            "Arsa Alani (m²)", 
+            value=float(st.session_state.inputs.get("arsa_alani_m2", 0.0) or 0.0), 
+            step=100.0, 
+            key="quick_arsa",
+            help="📏 Toplam arsa buyuklugu. Ornek: 8.500 m²"
+        )
+        emsal = st.number_input(
+            "Emsal", 
+            value=float(st.session_state.inputs.get("emsal", 0.0) or 0.0), 
+            step=0.05, 
+            format="%.2f", 
+            key="quick_emsal",
+            help="🏗️ Emsal = Toplam Insaat Alani / Arsa Alani. Tipik: 1.5-2.5"
+        )
+        arsa_degeri = st.number_input(
+            "Arsa Degeri ($)", 
+            value=float(st.session_state.inputs.get("arsa_toplam_degeri_usd", 0.0) or 0.0), 
+            step=100000.0, 
+            key="quick_arsa_degeri",
+            help="💰 Arsanin toplam aliş degeri (USD)"
+        )
         
         st.markdown("#### Proje Detaylari")
-        konut_sinifi = st.selectbox("Konut Sinifi", ["ALT", "ORTA", "YUKSEK"], 
-                                     index=["ALT","ORTA","YUKSEK"].index(st.session_state.inputs.get("konut_sinifi","ORTA")),
-                                     key="quick_sinif")
-        otopark_tipi = st.selectbox("Otopark Tipi", ["ACIK", "KAPALI"], 
-                                     index=0 if st.session_state.inputs.get("otopark_tipi","ACIK")=="ACIK" else 1,
-                                     key="quick_otopark")
+        konut_sinifi = st.selectbox(
+            "Konut Sinifi", 
+            ["ALT", "ORTA", "YUKSEK"], 
+            index=["ALT","ORTA","YUKSEK"].index(st.session_state.inputs.get("konut_sinifi","ORTA")),
+            key="quick_sinif",
+            help="🏠 Alt: Ekonomik, Orta: Standart, Yuksek: Premium"
+        )
+        otopark_tipi = st.selectbox(
+            "Otopark Tipi", 
+            ["ACIK", "KAPALI"], 
+            index=0 if st.session_state.inputs.get("otopark_tipi","ACIK")=="ACIK" else 1,
+            key="quick_otopark",
+            help="🚗 Acik: Acik otopark, Kapali: Kapali otopark"
+        )
     
     with col_right:
         st.markdown("#### Gelismis Ayarlar")
-        sat_kats = st.number_input("Satilabilir Alan Katsayisi", value=float(st.session_state.inputs.get("satilabilir_katsayi", 1.25)), step=0.01, format="%.2f", key="quick_sat")
-        ot_kats = st.number_input("Otopark Katsayisi", value=float(st.session_state.inputs.get("otopark_katsayi", DEFAULTS["otopark_katsayi"][otopark_tipi])), step=0.05, format="%.2f", key="quick_ot")
-        cost = st.number_input("Insaat Maliyeti ($/m²)", value=float(st.session_state.inputs.get("insaat_maliyet_usd_m2", DEFAULTS["insaat_maliyet_usd_m2"][konut_sinifi])), step=25.0, key="quick_cost")
-        ort_konut = st.number_input("Ortalama Konut (m²)", value=float(st.session_state.inputs.get("ortalama_konut_m2", 120.0)), step=5.0, key="quick_konut")
-        satis = st.number_input("Satis Fiyati ($/m²) — opsiyonel", value=float(st.session_state.inputs.get("satis_birim_fiyat_usd_m2", 0.0) or 0.0), step=50.0, key="quick_satis")
+        sat_kats = st.number_input(
+            "Satilabilir Alan Katsayisi", 
+            value=float(st.session_state.inputs.get("satilabilir_katsayi", 1.25)), 
+            step=0.01, 
+            format="%.2f", 
+            key="quick_sat",
+            help="📊 Emsal insaat × bu katsayi = satilabilir alan. Tipik: 1.20-1.35"
+        )
+        ot_kats = st.number_input(
+            "Otopark Katsayisi", 
+            value=float(st.session_state.inputs.get("otopark_katsayi", DEFAULTS["otopark_katsayi"][otopark_tipi])), 
+            step=0.05, 
+            format="%.2f", 
+            key="quick_ot",
+            help="🅿️ Satilabilir alan × bu katsayi = toplam insaat. Acik: ~1.20, Kapali: ~1.60"
+        )
+        cost = st.number_input(
+            "Insaat Maliyeti ($/m²)", 
+            value=float(st.session_state.inputs.get("insaat_maliyet_usd_m2", DEFAULTS["insaat_maliyet_usd_m2"][konut_sinifi])), 
+            step=25.0, 
+            key="quick_cost",
+            help="🔨 m² basina insaat maliyeti. Alt: ~700, Orta: ~900, Yuksek: ~1100 $/m²"
+        )
+        ort_konut = st.number_input(
+            "Ortalama Konut (m²)", 
+            value=float(st.session_state.inputs.get("ortalama_konut_m2", 120.0)), 
+            step=5.0, 
+            key="quick_konut",
+            help="🏡 Ortalama daire buyuklugu. Tipik: 100-150 m²"
+        )
+        satis = st.number_input(
+            "Satis Fiyati ($/m²)", 
+            value=float(st.session_state.inputs.get("satis_birim_fiyat_usd_m2", 0.0) or 0.0), 
+            step=50.0, 
+            key="quick_satis",
+            help="💵 Hedef satis fiyati. Bosveya 0 ise basabas/hedef fiyatlar gosterilir"
+        )
+
     
-    if st.button("🧮 Hesapla", use_container_width=True, type="primary"):
-        st.session_state.inputs = ensure_defaults({
-            "arsa_alani_m2": arsa,
-            "emsal": emsal,
-            "satilabilir_katsayi": sat_kats,
-            "otopark_tipi": otopark_tipi,
-            "otopark_katsayi": ot_kats,
-            "konut_sinifi": konut_sinifi,
-            "insaat_maliyet_usd_m2": cost,
-            "arsa_toplam_degeri_usd": arsa_degeri,
-            "ortalama_konut_m2": ort_konut,
-            "satis_birim_fiyat_usd_m2": (satis if satis > 0 else None),
-        })
-        success, remaining, total = check_and_increment_quota()
+    if st.button("🧮 HESAPLA", use_container_width=True, type="primary"):
+        with st.spinner("⏳ Hesaplaniyor..."):
+            st.session_state.inputs = ensure_defaults({
+                "arsa_alani_m2": arsa,
+                "emsal": emsal,
+                "satilabilir_katsayi": sat_kats,
+                "otopark_tipi": otopark_tipi,
+                "otopark_katsayi": ot_kats,
+                "konut_sinifi": konut_sinifi,
+                "insaat_maliyet_usd_m2": cost,
+                "arsa_toplam_degeri_usd": arsa_degeri,
+                "ortalama_konut_m2": ort_konut,
+                "satis_birim_fiyat_usd_m2": (satis if satis > 0 else None),
+            })
+            
+            # Quota check - ONLY here, NOT in chat!
+            success, remaining, total = check_and_increment_quota()
+            time.sleep(0.3)  # Visual feedback
+        
         if not success:
             st.error(f"❌ Gunluk limit doldu ({total} hesaplama/gun)")
+            st.info("💡 Yarin tekrar dene veya AI Asistan ile sinirsiz sohbet et!")
         else:
-            st.success(f"✅ Hesaplandi! ({remaining} hesaplama kaldi)")
+            st.success(f"✅ Hesaplama tamamlandi! ({remaining} hesaplama kaldi)")
+            time.sleep(0.3)
             st.rerun()
 
 # TAB 3: Results Dashboard
@@ -786,7 +895,84 @@ with tab3:
                 Hasilat: {fmt_usd(hasilat)} → Maliyet: {fmt_usd(maliyet)} → Kar: {fmt_usd(kar)}
             </div>
             """, unsafe_allow_html=True)
-        
+        # Apartment Type Pricing Table
+        if outs.get("daire_fiyatlari"):
+            st.divider()
+            st.markdown("### 🏠 Daire Tiplerine Gore Satis Fiyatlari")
+            
+            st.caption(f"Birim fiyat: {fmt_usd(outs.get('satis_birim_fiyat_usd_m2'))} / {fmt_try(outs.get('satis_birim_fiyat_try_m2'))}")
+            
+            # Create dataframe
+            daire_data = []
+            for tip in ["1+1", "2+1", "3+1", "4+1"]:
+                if tip in outs["daire_fiyatlari"]:
+                    bilgi = outs["daire_fiyatlari"][tip]
+                    daire_data.append({
+                        "Daire Tipi": tip,
+                        "Brut Alan": fmt_m2(bilgi['m2']),
+                        "Satis Fiyati (USD)": fmt_usd(bilgi['fiyat_usd']),
+                        "Satis Fiyati (TL)": fmt_try(bilgi['fiyat_try']) if bilgi['fiyat_try'] else "-",
+                    })
+            
+            df = pd.DataFrame(daire_data)
+            st.dataframe(df, use_container_width=True, hide_index=True)
+            
+            # Bar chart
+            st.markdown("#### 📊 Fiyat Karsilastirmasi")
+            
+            chart_df = pd.DataFrame({
+                "Tip": [d["Daire Tipi"] for d in daire_data],
+                "Fiyat (USD)": [outs["daire_fiyatlari"][tip]["fiyat_usd"] for tip in ["1+1", "2+1", "3+1", "4+1"] if tip in outs["daire_fiyatlari"]]
+            })
+            
+            st.bar_chart(chart_df.set_index("Tip"), height=300)
+            
+            # Info message
+            st.info("💡 Fiyatlar birim fiyat × brut alan olarak hesaplanmistir. Net alandan %15-20 fazladir.")
+
+# Break-even Analysis
+        if outs.get("breakeven_konut_adedi"):
+            st.divider()
+            st.markdown("### 🎯 Break-Even Analizi")
+            st.caption("Maliyeti karsilamak icin kac konut satilmali?")
+            
+            col1, col2, col3 = st.columns(3)
+            
+            breakeven_konut = int(outs.get("breakeven_konut_adedi", 0))
+            breakeven_oran = outs.get("breakeven_konut_orani", 0)
+            toplam_konut = int(outs.get("yaklasik_konut_adedi", 0))
+            
+            col1.metric(
+                "Break-Even Konut",
+                f"{breakeven_konut} adet",
+                help="Maliyeti karsilamak icin satilmasi gereken konut sayisi"
+            )
+            
+            col2.metric(
+                "Break-Even Orani",
+                fmt_pct(breakeven_oran),
+                help="Toplam konutun yuzde kaci"
+            )
+            
+            col3.metric(
+                "Toplam Konut",
+                f"{toplam_konut} adet"
+            )
+            
+            # Progress bar
+            if toplam_konut > 0:
+                st.progress(
+                    min(breakeven_oran, 1.0),
+                    text=f"{breakeven_konut}/{toplam_konut} konut satilmali (%{breakeven_oran*100:.1f})"
+                )
+                
+                # Color-coded message
+                if breakeven_oran < 0.7:
+                    st.success(f"✅ Dusuk risk: Konutlarin %{breakeven_oran*100:.0f}'ini satarak maliyeti karsilayabilirsiniz.")
+                elif breakeven_oran < 0.9:
+                    st.warning(f"⚠️ Orta risk: Konutlarin %{breakeven_oran*100:.0f}'ini satmaniz gerekiyor.")
+                else:
+                    st.error(f"🚩 Yuksek risk: Neredeyse tum konutlari satmaniz gerekiyor (%{breakeven_oran*100:.0f}).")
         # Warnings
         if warns:
             st.divider()
@@ -864,3 +1050,5 @@ st.markdown("""
     <small>AI-powered feasibility analysis for residential projects</small>
 </div>
 """, unsafe_allow_html=True)
+
+
