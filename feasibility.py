@@ -12,6 +12,14 @@ DEFAULTS = {
     "ortalama_konut_m2": 120,
 }
 
+# Daire tipleri ve standart m2 değerleri
+DAIRE_TIPLERI = {
+    "1+1": 70,
+    "2+1": 90,
+    "3+1": 120,
+    "4+1": 150,
+}
+
 def compute_outputs(
     inputs: Dict[str, Any],
     usd_try_rate: Optional[float] = None,
@@ -125,6 +133,10 @@ def compute_outputs(
         "proje_kari_usd": None,
         "proje_kari_try": None,
         "brut_karlilik_orani": None,
+        
+        # Break-even analysis
+        "breakeven_konut_adedi": None,
+        "breakeven_konut_orani": None,
     }
 
     # --- Revenue mode (only if valid sales price) ---
@@ -132,6 +144,15 @@ def compute_outputs(
         hasilat = satilabilir * satis_fiyat
         kar = hasilat - toplam_maliyet
         brut_karlilik = (kar / toplam_maliyet) if toplam_maliyet > 0 else 0.0
+        
+        # Break-even: Kaç konut satılmalı?
+        if konut_adedi > 0 and ort_konut > 0:
+            breakeven_alan = toplam_maliyet / satis_fiyat if satis_fiyat > 0 else 0
+            breakeven_konut = math.ceil(breakeven_alan / ort_konut) if ort_konut > 0 else 0
+            breakeven_oran = (breakeven_konut / konut_adedi) if konut_adedi > 0 else 0
+        else:
+            breakeven_konut = 0
+            breakeven_oran = 0
 
         outputs.update({
             "proje_hasilati_usd": hasilat,
@@ -139,7 +160,19 @@ def compute_outputs(
             "proje_kari_usd": kar,
             "proje_kari_try": to_try(kar),
             "brut_karlilik_orani": brut_karlilik,
+            "breakeven_konut_adedi": breakeven_konut,
+            "breakeven_konut_orani": breakeven_oran,
         })
+        
+        # Daire tiplerine göre fiyatlar
+        daire_fiyatlari = {}
+        for tip, m2 in DAIRE_TIPLERI.items():
+            daire_fiyatlari[tip] = {
+                "m2": m2,
+                "fiyat_usd": m2 * satis_fiyat,
+                "fiyat_try": to_try(m2 * satis_fiyat) if usd_try_rate else None,
+            }
+        outputs["daire_fiyatlari"] = daire_fiyatlari
 
     # --- Warnings (deterministic) ---
     warnings: List[str] = []
