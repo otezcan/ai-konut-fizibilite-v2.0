@@ -493,7 +493,7 @@ with st.sidebar:
 # ============================================================================
 # MAIN CONTENT - TABS
 # ============================================================================
-tab1, tab2, tab3 = st.tabs(["💬 AI Asistan", "📊 Hizli Hesap", "📈 Sonuclar"])
+tab1, tab2, tab3, tab4 = st.tabs(["💬 AI Asistan", "📊 Hızlı Hesap", "📈 Sonuçlar", "💰 Nakit Akış"])
 
 client = get_client()
 
@@ -1039,6 +1039,177 @@ with tab3:
                         )
     else:
         st.info("👈 Lutfen AI Asistan veya Hizli Hesap sekmesinden bilgileri girin")
+
+
+# ============================================================================
+# TAB 4: NAKİT AKIŞ ANALİZİ
+# ============================================================================
+with tab4:
+    st.markdown("## 💰 Nakit Akış & Yatırım Analizi")
+    st.markdown("*Proje bazlı IRR, NPV ve dönemsel nakit akış senaryoları*")
+
+    try:
+        from core.cashflow import (
+            compute_cashflow, compare_scenarios,
+            PRESET_PESSIMISTIC, PRESET_BASE, PRESET_OPTIMISTIC,
+            CashFlowScenario,
+        )
+        cashflow_ok = True
+    except ImportError:
+        st.error("⚠️ core/cashflow.py bulunamadı. `pip install numpy-financial` gerekebilir.")
+        cashflow_ok = False
+
+    if cashflow_ok:
+        outputs = st.session_state.get("outputs", None)
+
+        if not outputs or not outputs.get("toplam_proje_maliyeti_usd"):
+            st.info("👈 Önce **Hızlı Hesap** veya **AI Asistan** sekmesinden fizibilite hesabı yap.")
+        else:
+            total_cost   = outputs["toplam_proje_maliyeti_usd"]
+            satilabilir  = outputs.get("satilabilir_alan_m2", 0)
+            satis_fiyat  = outputs.get("satis_birim_fiyat_usd_m2") or outputs.get("target_30_usd_m2", 2000)
+
+            st.markdown(f"""
+            <div style='background:linear-gradient(135deg,#1E3A8A,#3B82F6);
+                        padding:1rem 1.5rem;border-radius:12px;color:white;margin-bottom:1rem;'>
+              <b>📌 Temel Girdi Özeti</b><br>
+              Toplam Maliyet: <b>${total_cost/1e6:.1f}M</b> &nbsp;|&nbsp;
+              Satılabilir Alan: <b>{satilabilir:,.0f} m²</b> &nbsp;|&nbsp;
+              Satış Fiyatı: <b>${satis_fiyat:,.0f}/m²</b>
+            </div>
+            """, unsafe_allow_html=True)
+
+            col_ctrl1, col_ctrl2, col_ctrl3 = st.columns([2, 2, 2])
+            with col_ctrl1:
+                duration_q = st.slider("⏱ Proje Süresi (Çeyrek)", min_value=4, max_value=16, value=8, step=1, help="4 çeyrek = 1 yıl")
+                st.caption(f"≈ {duration_q/4:.1f} yıl")
+            with col_ctrl2:
+                mode = st.radio("📊 Görünüm", ["Senaryo Karşılaştırma", "Tek Senaryo Detay"], horizontal=True)
+            with col_ctrl3:
+                custom_price = st.number_input("💲 Satış Fiyatı Override (USD/m²)", min_value=500, max_value=10000, value=int(satis_fiyat), step=100)
+
+            import pandas as pd
+
+            if mode == "Senaryo Karşılaştırma":
+                with st.spinner("Senaryolar hesaplanıyor..."):
+                    results = compare_scenarios(
+                        total_cost_usd=total_cost,
+                        satilabilir_alan_m2=satilabilir,
+                        satis_fiyat_usd_m2=float(custom_price),
+                        project_duration_quarters=duration_q,
+                    )
+
+                st.markdown("### 📊 Senaryo Özeti")
+                cols = st.columns(3)
+                colors = ["#EF4444", "#3B82F6", "#10B981"]
+                for i, (r, col) in enumerate(zip(results, cols)):
+                    irr_color = "#10B981" if r.irr_project > 0.20 else "#F59E0B" if r.irr_project > 0.10 else "#EF4444"
+                    with col:
+                        st.markdown(f"""
+                        <div style='background:linear-gradient(135deg,{colors[i]}22,{colors[i]}11);
+                                    border:2px solid {colors[i]}44;border-radius:12px;
+                                    padding:1.2rem;text-align:center;'>
+                            <div style='font-size:1.3em;font-weight:bold;'>{r.scenario.name}</div>
+                            <hr style='border-color:{colors[i]}44;'>
+                            <div style='font-size:1.8em;font-weight:bold;color:{irr_color};'>{r.irr_project:.1%}</div>
+                            <div style='font-size:0.8em;color:#6B7280;'>Proje IRR (yıllık)</div>
+                            <br>
+                            <div><b>${r.npv_project/1e6:.1f}M</b> NPV</div>
+                            <div><b>{r.payback_years:.1f} yıl</b> geri ödeme</div>
+                            <div style='color:#EF4444;'><b>${abs(r.max_funding_need)/1e6:.1f}M</b> max finansman</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                st.markdown("### 📋 Dönemsel Nakit Akış")
+                tab_data = {"Dönem": [p.period for p in results[1].periods]}
+                for r in results:
+                    tab_data[f"{r.scenario.name} Gelir"] = [f"${p.revenue/1e6:.1f}M" for p in r.periods]
+                    tab_data[f"{r.scenario.name} Birikimli"] = [
+                        f"{'🔴' if p.cumulative < 0 else '🟢'} ${p.cumulative/1e6:.1f}M" for p in r.periods
+                    ]
+                st.dataframe(pd.DataFrame(tab_data), use_container_width=True, hide_index=True)
+
+                st.markdown("### 📈 Birikimli Nakit Akış Grafiği")
+                chart_df = pd.DataFrame(
+                    {r.scenario.name: [p.cumulative/1e6 for p in r.periods] for r in results},
+                    index=[p.period for p in results[0].periods]
+                )
+                st.line_chart(chart_df, height=350)
+                st.caption("Negatif bölge = finansman ihtiyacı | Sıfır geçiş = geri ödeme noktası")
+
+                st.markdown("### 📊 Baz Senaryo — Dönemsel Maliyet vs Gelir")
+                base_r = results[1]
+                bar_df = pd.DataFrame({
+                    "Maliyet ($M)": [-p.cost/1e6 for p in base_r.periods],
+                    "Gelir ($M)":   [p.revenue/1e6 for p in base_r.periods],
+                }, index=[p.period for p in base_r.periods])
+                st.bar_chart(bar_df, height=300)
+
+            else:
+                preset_map = {
+                    "🐻 Kötümser": PRESET_PESSIMISTIC,
+                    "🎯 Baz": PRESET_BASE,
+                    "🚀 İyimser": PRESET_OPTIMISTIC,
+                    "⚙️ Özel": None,
+                }
+                sel = st.selectbox("Senaryo Seç", list(preset_map.keys()))
+
+                if preset_map[sel] is None:
+                    st.markdown("#### ⚙️ Özel Senaryo Parametreleri")
+                    c1, c2, c3 = st.columns(3)
+                    with c1:
+                        presale    = st.slider("Ön Satış Oranı (%)", 0, 70, 30, 5) / 100
+                        equity     = st.slider("Özkaynak Oranı (%)", 20, 100, 50, 5) / 100
+                    with c2:
+                        cost_curve = st.selectbox("Maliyet Eğrisi", ["normal","slow","fast"])
+                        sales_vel  = st.selectbox("Satış Hızı", ["normal","slow","fast"])
+                    with c3:
+                        interest   = st.slider("Yıllık Faiz (%)", 10, 40, 22, 1) / 100
+                    scenario = CashFlowScenario(
+                        name="⚙️ Özel", cost_curve=cost_curve,
+                        presale_ratio=presale, sales_velocity=sales_vel,
+                        equity_ratio=equity, loan_interest_annual=interest,
+                    )
+                else:
+                    scenario = preset_map[sel]
+
+                with st.spinner("Hesaplanıyor..."):
+                    r = compute_cashflow(
+                        total_cost_usd=total_cost,
+                        satilabilir_alan_m2=satilabilir,
+                        satis_fiyat_usd_m2=float(custom_price),
+                        project_duration_quarters=duration_q,
+                        scenario=scenario,
+                    )
+
+                k1, k2, k3, k4 = st.columns(4)
+                k1.metric("📈 Proje IRR", f"{r.irr_project:.1%}")
+                k2.metric("💵 NPV (%15)", f"${r.npv_project/1e6:.1f}M")
+                k3.metric("⏱ Geri Ödeme", f"{r.payback_years:.1f} yıl")
+                k4.metric("🏦 Max Finansman", f"${abs(r.max_funding_need)/1e6:.1f}M")
+
+                st.markdown("#### 📋 Dönemsel Nakit Akış Tablosu")
+                detail_df = pd.DataFrame({
+                    "Dönem":        [p.period for p in r.periods],
+                    "Maliyet ($M)": [f"${p.cost/1e6:.2f}M" for p in r.periods],
+                    "Gelir ($M)":   [f"${p.revenue/1e6:.2f}M" for p in r.periods],
+                    "Kredi Çekimi": [f"${p.loan_drawdown/1e6:.2f}M" for p in r.periods],
+                    "Geri Ödeme":   [f"${p.loan_repayment/1e6:.2f}M" for p in r.periods],
+                    "Net ($M)":     [f"{'↑' if p.net>=0 else '↓'} ${p.net/1e6:.2f}M" for p in r.periods],
+                    "Birikimli":    [f"{'🟢' if p.cumulative>=0 else '🔴'} ${p.cumulative/1e6:.2f}M" for p in r.periods],
+                })
+                st.dataframe(detail_df, use_container_width=True, hide_index=True)
+
+                chart_df = pd.DataFrame({
+                    "Birikimli ($M)": [p.cumulative/1e6 for p in r.periods],
+                    "Net ($M)":       [p.net/1e6 for p in r.periods],
+                }, index=[p.period for p in r.periods])
+                st.line_chart(chart_df, height=300)
+
+                if r.total_loan_interest > 0:
+                    st.warning(f"💳 Toplam faiz maliyeti: **${r.total_loan_interest/1e6:.2f}M** "
+                               f"(maliyetin %{r.total_loan_interest/total_cost*100:.1f}\'i)")
+
 
 # ============================================================================
 # FOOTER
