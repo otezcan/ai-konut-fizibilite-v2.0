@@ -493,7 +493,7 @@ with st.sidebar:
 # ============================================================================
 # MAIN CONTENT - TABS
 # ============================================================================
-tab1, tab2, tab3, tab4 = st.tabs(["💬 AI Asistan", "📊 Hızlı Hesap", "📈 Sonuçlar", "💰 Nakit Akış"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["💬 AI Asistan", "📊 Hızlı Hesap", "📈 Sonuçlar", "💰 Nakit Akış", "🏗️ Karma Kullanım"])
 
 client = get_client()
 
@@ -1209,6 +1209,161 @@ with tab4:
                 if r.total_loan_interest > 0:
                     st.warning(f"💳 Toplam faiz maliyeti: **${r.total_loan_interest/1e6:.2f}M** "
                                f"(maliyetin %{r.total_loan_interest/total_cost*100:.1f}\'i)")
+
+
+
+# ============================================================================
+# TAB 5: KARMA KULLANIM (MIXED-USE)
+# ============================================================================
+with tab5:
+    st.markdown("## 🏗️ Karma Kullanım Analizi")
+    st.markdown("*Konut + Ofis + Ticari karışık projeler için ayrı tip bazlı fizibilite*")
+
+    try:
+        from core.mixed_use import (
+            compute_mixed_use, quick_mix, UsageType,
+            DEFAULTS_BY_TYPE, USAGE_TYPES
+        )
+        mu_ok = True
+    except ImportError:
+        st.error("⚠️ core/mixed_use.py bulunamadı.")
+        mu_ok = False
+
+    if mu_ok:
+        import pandas as pd
+
+        st.markdown("### ⚙️ Proje Parametreleri")
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            mu_arsa = st.number_input("Arsa Alanı (m²)", min_value=500, max_value=100000, value=8500, step=500, key="mu_arsa")
+        with c2:
+            mu_emsal = st.number_input("Emsal", min_value=0.5, max_value=6.0, value=2.0, step=0.1, key="mu_emsal")
+        with c3:
+            mu_otopark = st.selectbox("Otopark", ["KAPALI", "ACIK"], key="mu_otopark")
+        with c4:
+            mu_arsa_deger = st.number_input("Arsa Değeri ($M)", min_value=0.1, max_value=500.0, value=5.5, step=0.1, key="mu_arsa_deger") * 1_000_000
+
+        st.markdown("### 📐 Kullanım Tipi Dağılımı")
+        st.caption("Yüzdelerin toplamı 100 olmalı — otomatik normalize edilir.")
+
+        col_k, col_o, col_t = st.columns(3)
+        with col_k:
+            st.markdown("🏠 **Konut**")
+            konut_pct = st.slider("Oran (%)", 0, 100, 60, 5, key="mu_konut_pct")
+            konut_cost = st.number_input("İnşaat Maliyeti ($/m²)", 500, 3000,
+                DEFAULTS_BY_TYPE["Konut"]["insaat_maliyet_usd_m2"], 50, key="mu_konut_cost")
+            konut_price = st.number_input("Satış Fiyatı ($/m²)", 500, 15000,
+                DEFAULTS_BY_TYPE["Konut"]["satis_fiyat_usd_m2"], 100, key="mu_konut_price")
+            konut_kdv = st.selectbox("KDV", ["8%", "1%", "20%"], key="mu_konut_kdv")
+
+        with col_o:
+            st.markdown("🏢 **Ofis**")
+            ofis_pct = st.slider("Oran (%)", 0, 100, 25, 5, key="mu_ofis_pct")
+            ofis_cost = st.number_input("İnşaat Maliyeti ($/m²)", 500, 3000,
+                DEFAULTS_BY_TYPE["Ofis"]["insaat_maliyet_usd_m2"], 50, key="mu_ofis_cost")
+            ofis_price = st.number_input("Satış Fiyatı ($/m²)", 500, 15000,
+                DEFAULTS_BY_TYPE["Ofis"]["satis_fiyat_usd_m2"], 100, key="mu_ofis_price")
+
+        with col_t:
+            st.markdown("🏪 **Ticari**")
+            ticari_pct = st.slider("Oran (%)", 0, 100, 15, 5, key="mu_ticari_pct")
+            ticari_cost = st.number_input("İnşaat Maliyeti ($/m²)", 500, 3000,
+                DEFAULTS_BY_TYPE["Ticari"]["insaat_maliyet_usd_m2"], 50, key="mu_ticari_cost")
+            ticari_price = st.number_input("Satış Fiyatı ($/m²)", 500, 15000,
+                DEFAULTS_BY_TYPE["Ticari"]["satis_fiyat_usd_m2"], 100, key="mu_ticari_price")
+
+        kdv_map = {"8%": 0.08, "1%": 0.01, "20%": 0.20}
+
+        if st.button("🧮 Karma Kullanım Hesapla", use_container_width=True, type="primary", key="mu_calc"):
+            total_pct = konut_pct + ofis_pct + ticari_pct
+            if total_pct == 0:
+                st.error("En az bir kullanım tipi seçilmeli.")
+            else:
+                usage_types = []
+                if konut_pct > 0:
+                    usage_types.append(UsageType(
+                        name="Konut", alan_orani=konut_pct/total_pct,
+                        insaat_maliyet_usd_m2=konut_cost, satis_fiyat_usd_m2=konut_price,
+                        kdv_orani=kdv_map[konut_kdv], satilabilir_katsayi=1.25,
+                    ))
+                if ofis_pct > 0:
+                    usage_types.append(UsageType(
+                        name="Ofis", alan_orani=ofis_pct/total_pct,
+                        insaat_maliyet_usd_m2=ofis_cost, satis_fiyat_usd_m2=ofis_price,
+                        kdv_orani=0.20, satilabilir_katsayi=1.10,
+                    ))
+                if ticari_pct > 0:
+                    usage_types.append(UsageType(
+                        name="Ticari", alan_orani=ticari_pct/total_pct,
+                        insaat_maliyet_usd_m2=ticari_cost, satis_fiyat_usd_m2=ticari_price,
+                        kdv_orani=0.20, satilabilir_katsayi=1.05,
+                    ))
+
+                r = compute_mixed_use(mu_arsa, mu_emsal, mu_otopark, mu_arsa_deger, usage_types)
+
+                # ── Özet KPI'lar ──
+                st.markdown("### 📊 Özet Sonuçlar")
+                m1, m2, m3, m4, m5 = st.columns(5)
+                m1.metric("Satılabilir Alan", f"{r.toplam_satilabilir_m2:,.0f} m²")
+                m2.metric("Toplam Maliyet", f"${r.toplam_maliyet_usd/1e6:.1f}M")
+                m3.metric("Toplam Hasılat", f"${r.toplam_hasilat_usd/1e6:.1f}M")
+                kar_color = "normal" if r.toplam_kar_usd >= 0 else "inverse"
+                m4.metric("Toplam Kâr", f"${r.toplam_kar_usd/1e6:.1f}M",
+                          delta=f"{r.brut_karlilik:.1%} kârlılık")
+                m5.metric("Ağırlıklı Başabaş", f"${r.agirlikli_breakeven_usd_m2:,.0f}/m²")
+
+                if r.toplam_kdv_usd > 0:
+                    st.info(f"🧾 Toplam KDV tahsilatı: **${r.toplam_kdv_usd/1e6:.2f}M** "
+                            f"(alıcıdan tahsil edilir, devlete ödenir)")
+
+                # ── Tip bazlı karşılaştırma tablosu ──
+                st.markdown("### 📋 Kullanım Tipi Karşılaştırması")
+                rows = []
+                emojis = {"Konut": "🏠", "Ofis": "🏢", "Ticari": "🏪"}
+                for t in r.types:
+                    rows.append({
+                        "Tip": f"{emojis.get(t.name,'')} {t.name}",
+                        "Oran": f"%{t.alan_orani*100:.0f}",
+                        "Satılabilir (m²)": f"{t.satilabilir_alan_m2:,.0f}",
+                        "Maliyet": f"${t.toplam_maliyet_usd/1e6:.2f}M",
+                        "Hasılat (KDV hariç)": f"${t.satis_hasilati_usd/1e6:.2f}M",
+                        "KDV": f"${t.kdv_usd/1e6:.2f}M",
+                        "Kâr": f"${t.kar_usd/1e6:.2f}M",
+                        "Kârlılık": f"{t.brut_karlilik:.1%}",
+                        "Başabaş ($/m²)": f"${t.breakeven_usd_m2:,.0f}",
+                        "%30 Hedef ($/m²)": f"${t.target_30_usd_m2:,.0f}",
+                    })
+                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+                # ── Grafikler ──
+                g1, g2 = st.columns(2)
+                with g1:
+                    st.markdown("#### Alan Dağılımı")
+                    area_df = pd.DataFrame({
+                        "Tip": [f"{emojis.get(t.name,'')} {t.name}" for t in r.types],
+                        "Satılabilir (m²)": [t.satilabilir_alan_m2 for t in r.types],
+                    }).set_index("Tip")
+                    st.bar_chart(area_df, height=250)
+
+                with g2:
+                    st.markdown("#### Kâr Dağılımı")
+                    profit_df = pd.DataFrame({
+                        "Tip": [f"{emojis.get(t.name,'')} {t.name}" for t in r.types],
+                        "Kâr ($M)": [t.kar_usd/1e6 for t in r.types],
+                    }).set_index("Tip")
+                    st.bar_chart(profit_df, height=250)
+
+                # Maliyet vs Hasılat per tip
+                st.markdown("#### 📊 Maliyet vs Hasılat (Tip Bazlı)")
+                mv_df = pd.DataFrame({
+                    "Maliyet ($M)": [t.toplam_maliyet_usd/1e6 for t in r.types],
+                    "Hasılat ($M)": [t.satis_hasilati_usd/1e6 for t in r.types],
+                }, index=[f"{emojis.get(t.name,'')} {t.name}" for t in r.types])
+                st.bar_chart(mv_df, height=300)
+
+                # Session'a kaydet (cash flow ile entegrasyon için)
+                st.session_state["mixed_use_result"] = r.to_dict()
+                st.success("✅ Sonuçlar hesaplandı! Nakit Akış sekmesinde bu projeyi analiz edebilirsin.")
 
 
 # ============================================================================
