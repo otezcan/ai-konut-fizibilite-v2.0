@@ -493,7 +493,7 @@ with st.sidebar:
 # ============================================================================
 # MAIN CONTENT - TABS
 # ============================================================================
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["💬 AI Asistan", "📊 Hızlı Hesap", "📈 Sonuçlar", "💰 Nakit Akış", "🏗️ Karma Kullanım"])
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["💬 AI Asistan", "📊 Hızlı Hesap", "📈 Sonuçlar", "💰 Nakit Akış", "🏗️ Karma Kullanım", "📍 Piyasa Karşılaştırma"])
 
 client = get_client()
 
@@ -1364,6 +1364,154 @@ with tab5:
                 # Session'a kaydet (cash flow ile entegrasyon için)
                 st.session_state["mixed_use_result"] = r.to_dict()
                 st.success("✅ Sonuçlar hesaplandı! Nakit Akış sekmesinde bu projeyi analiz edebilirsin.")
+
+
+
+# ============================================================================
+# TAB 6: PİYASA FİYAT KARŞILAŞTIRMASI
+# ============================================================================
+with tab6:
+    st.markdown("## 📍 Piyasa Fiyat Karşılaştırması")
+    st.markdown("*Projenin hedef satış fiyatını bölgesel piyasa ortalamasıyla karşılaştır*")
+
+    try:
+        from core.market_data import (
+            compare_to_market, get_iller, get_ilceler,
+            get_il_stats, get_fiyat
+        )
+        md_ok = True
+    except ImportError:
+        st.error("⚠️ core/market_data.py bulunamadı.")
+        md_ok = False
+
+    if md_ok:
+        import pandas as pd
+
+        # ── Lokasyon Seçimi ──────────────────────────────────────────────
+        st.markdown("### 📌 Lokasyon & Fiyat Girişi")
+        loc1, loc2 = st.columns(2)
+        with loc1:
+            secili_il = st.selectbox("İl", get_iller(), key="md_il")
+        with loc2:
+            secili_ilce = st.selectbox("İlçe", get_ilceler(secili_il), key="md_ilce")
+
+        # Mevcut outputs'tan fiyat al veya manuel gir
+        outputs = st.session_state.get("outputs", {})
+        default_konut = int(outputs.get("satis_birim_fiyat_usd_m2") or
+                           outputs.get("target_30_usd_m2") or
+                           get_fiyat(secili_il, secili_ilce, "konut") or 2000)
+
+        st.markdown("#### Projenin Hedef Satış Fiyatları (USD/m²)")
+        p1, p2, p3 = st.columns(3)
+        with p1:
+            p_konut  = st.number_input("🏠 Konut", 0, 20000, default_konut, 100, key="md_pkonut",
+                                        help="0 = bu tip yok / hesaplama dışı")
+        with p2:
+            p_ofis   = st.number_input("🏢 Ofis",  0, 20000,
+                int(get_fiyat(secili_il, secili_ilce, "ofis") or 0), 100, key="md_pofis")
+        with p3:
+            p_ticari = st.number_input("🏪 Ticari", 0, 20000,
+                int(get_fiyat(secili_il, secili_ilce, "ticari") or 0), 100, key="md_pticari")
+
+        if st.button("🔍 Piyasayla Karşılaştır", use_container_width=True,
+                     type="primary", key="md_compare"):
+
+            report = compare_to_market(
+                il=secili_il, ilce=secili_ilce,
+                proje_fiyat_konut=p_konut if p_konut > 0 else None,
+                proje_fiyat_ofis=p_ofis   if p_ofis  > 0 else None,
+                proje_fiyat_ticari=p_ticari if p_ticari > 0 else None,
+            )
+
+            if not report.comparisons:
+                st.warning("Seçilen ilçe için fiyat verisi bulunamadı veya fiyat girilmedi.")
+            else:
+                # ── Karşılaştırma Kartları ───────────────────────────────
+                st.markdown(f"### 🏙️ {secili_il} / {secili_ilce} — Piyasa Karşılaştırması")
+                st.caption(f"Veri kaynağı: {report.kaynak} ({report.veri_tarihi})")
+
+                cols = st.columns(len(report.comparisons))
+                emojis = {"konut": "🏠", "ofis": "🏢", "ticari": "🏪"}
+                colors = {
+                    "🔴": "#EF4444", "🟠": "#F97316",
+                    "🟡": "#F59E0B", "🟢": "#10B981"
+                }
+
+                for i, (c, col) in enumerate(zip(report.comparisons, cols)):
+                    deg_emoji = c.degerlendirme.split()[0]
+                    color = colors.get(deg_emoji, "#6B7280")
+                    fark_sign = "+" if c.fark_usd_m2 >= 0 else ""
+                    with col:
+                        st.markdown(f"""
+                        <div style='border:2px solid {color}44;border-radius:12px;
+                                    padding:1.2rem;text-align:center;
+                                    background:{color}11;'>
+                            <div style='font-size:1.2em;'>{emojis.get(c.tip,"")} {c.tip.upper()}</div>
+                            <hr style='border-color:{color}33;'>
+                            <div style='font-size:0.85em;color:#6B7280;'>Piyasa Ortalaması</div>
+                            <div style='font-size:1.4em;font-weight:bold;'>${c.piyasa_fiyat_usd_m2:,.0f}/m²</div>
+                            <br>
+                            <div style='font-size:0.85em;color:#6B7280;'>Proje Fiyatı</div>
+                            <div style='font-size:1.4em;font-weight:bold;color:{color};'>${c.proje_fiyat_usd_m2:,.0f}/m²</div>
+                            <br>
+                            <div style='font-size:1.1em;font-weight:bold;color:{color};'>
+                                {fark_sign}${c.fark_usd_m2:,.0f}/m² ({c.fark_pct:+.1%})
+                            </div>
+                            <div style='margin-top:0.5rem;font-size:0.85em;'>{c.degerlendirme}</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                # Öneriler
+                st.markdown("### 💡 Değerlendirme & Öneriler")
+                for c in report.comparisons:
+                    st.info(f"**{emojis.get(c.tip,'')} {c.tip.title()}:** {c.oneri}")
+
+                # ── İl Geneli İstatistik ─────────────────────────────────
+                st.markdown(f"### 📊 {secili_il} Geneli Fiyat Aralığı")
+                il_stats = get_il_stats(secili_il)
+                if il_stats:
+                    stat_rows = []
+                    for tip, s in il_stats.items():
+                        proje_f = {"konut": p_konut, "ofis": p_ofis, "ticari": p_ticari}.get(tip, 0)
+                        ilce_f  = get_fiyat(secili_il, secili_ilce, tip) or 0
+                        stat_rows.append({
+                            "Tip": f"{emojis.get(tip,'')} {tip.title()}",
+                            "İl Min": f"${s['min']:,}",
+                            "İl Ort": f"${s['ort']:,.0f}",
+                            "İl Max": f"${s['max']:,}",
+                            f"{secili_ilce} Piyasa": f"${ilce_f:,}" if ilce_f else "-",
+                            "Projeniz": f"${proje_f:,}" if proje_f > 0 else "-",
+                        })
+                    st.dataframe(pd.DataFrame(stat_rows), use_container_width=True, hide_index=True)
+
+                # ── Komşu İlçe Karşılaştırması ───────────────────────────
+                st.markdown(f"### 🗺️ {secili_il} İlçe Fiyat Haritası (Konut)")
+                if report.nearby_prices:
+                    nearby_data = {secili_ilce: {"konut": report.piyasa_ortalama_konut}}
+                    nearby_data.update({k: v for k, v in report.nearby_prices.items()})
+
+                    chart_rows = sorted(
+                        [(ilce, d.get("konut", 0)) for ilce, d in nearby_data.items() if d.get("konut")],
+                        key=lambda x: x[1], reverse=True
+                    )
+                    chart_df = pd.DataFrame(chart_rows, columns=["İlçe", "Konut ($/m²)"]).set_index("İlçe")
+                    st.bar_chart(chart_df, height=350)
+                    st.caption(f"Turuncu çubuk: seçilen ilçe ({secili_ilce}) — yatay sıralama fiyata göre")
+
+        # Veri notu
+        with st.expander("ℹ️ Veri Hakkında"):
+            st.markdown("""
+            **Fiyat verisi:** REIDIN, Endeksa ve Sahibinden.com kaynaklı 2025-Q4 ortalama değerleri.
+            Bu değerler **tahmini** olup gerçek piyasadan ±%15 sapabilir.
+
+            **Güncelleme:** Fiyatları manuel güncellemek için `core/market_data.py` dosyasındaki
+            `MARKET_DB` sözlüğünü düzenleyebilirsin.
+
+            **Eksik ilçe?** Yeni ilçe eklemek için:
+            ```python
+            MARKET_DB["İstanbul"]["YeniİlçeAdı"] = {"konut": 2500, "ofis": 3000, "ticari": 5000}
+            ```
+            """)
 
 
 # ============================================================================
